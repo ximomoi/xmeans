@@ -51,8 +51,8 @@ public:
   void kmeans(int k, int kakunin){
     int h, i, j, count, error = 0;
     float deg_random, rad_random, range_random, distance, cluster_old_x[k], cluster_old_y[k], x_add, y_add, center_coordinate_x = 0, center_coordinate_y = 0, center_distance, center_distance_max;
-    //cluster_info(x, y, number, 未使用, cov_det_add)
-    cluster_info = MatrixXf::Zero(5, k);
+    //cluster_info(x, y, number, cov_det_add)
+    cluster_info = MatrixXf::Zero(4, k);
 
     for(i = 0; i < obstacle_max; i++){
       if(laser(i) == 0){
@@ -60,9 +60,9 @@ public:
       }
     }
     if(error == obstacle_max){
-      ROS_ERROR("Laser scan value is zero");
+      ROS_ERROR("Laser scan value is zero-----");
     }else if(obstacle_last_num == 0){
-      ROS_ERROR("There is no dynamic obstacle");
+      ROS_ERROR("There is no dynamic obstacle-----");
     }else{
       //取得した障害物の座標を元にランダムクラスタを配置する
       for(h = 0; h < obstacle_last_num; h++){
@@ -113,8 +113,6 @@ public:
         }
         //確認
         ROS_INFO("1-----");
-        ROS_INFO("clus_x1:%f, clus_y1:%f", cluster_info(0, 0), cluster_info(1, 0));
-        ROS_INFO("clus_x2:%f, clus_y2:%f", cluster_info(0, 1), cluster_info(1, 1));
         ROS_INFO("obje_rang180:%f, obje_rang360:%f, obje_rang540:%f", laser(180), laser(360), laser(540));
         ROS_INFO("range_rand:%f, deg_rand:%f", range_random, deg_random);
         ROS_INFO("------");
@@ -142,14 +140,13 @@ public:
             cluster_info(1, j) = y_add / count;
           }
           //確認
+          ROS_INFO("2-----");
           ROS_INFO("count:%d, k:%d", count, j);
-        }
-        //確認
-        ROS_INFO("2-----");
-        ROS_INFO("clus_old_x1:%f, clus_old_y1:%f", cluster_old_x[0], cluster_old_y[0]);
-        ROS_INFO("clus_old_x2:%f, clus_old_y2:%f", cluster_old_x[1], cluster_old_y[1]);
-        ROS_INFO("------");
 
+          ROS_INFO("k:%d, clus_old_x:%f, clus_old_y:%f", j, cluster_old_x[j], cluster_old_y[j]);
+          ROS_INFO("         clus_x:%f,    clus_y:%f", cluster_info(0, j), cluster_info(1, j));
+          ROS_INFO("------");
+        }
 
         //今回のクラスタ座標と前回のクラスタ座標を比較
         for(j = 0; j < k; j++){
@@ -162,8 +159,6 @@ public:
         }
         //確認
         ROS_INFO("3-----");
-        ROS_INFO("clus_x1:%f, clus_y1:%f", cluster_info(0, 0), cluster_info(1, 0));
-        ROS_INFO("clus_x2:%f, clus_y2:%f", cluster_info(0, 1), cluster_info(1, 1));
         ROS_INFO("loop:%d, kaisuu:%d, last_num:%d", kakunin, syuusoku, obstacle_last_num);
         ROS_INFO("------");
 
@@ -182,13 +177,80 @@ public:
     ROS_INFO("--------------finish");
   }
 
+  void likelihood(int k){
+    int j, h, count; 
+    float likelihood[k], cov_det, ave_scalar;
+    //cov
+    cov = Matrix2f::Zero();
+    for(j = 0; j < k; j++){
+      count = 0;
+      for(h = 0; h < obstacle_last_num; h++){
+        if(cluster_info(2, j) == objects_info(3, h)){
+          cov(0, 0) += pow(cluster_info(0, j) - objects_info(0, h), 2);
+          cov(1, 1) += pow(cluster_info(1, j) - objects_info(1, h), 2);
+          cov(0, 1) += (cluster_info(0, j) - objects_info(0, h)) * (cluster_info(1, j) - objects_info(1, h));
+          count += 1;
+        }
+      }
+      cov(0, 0) = cov(0, 0) / count;
+      cov(1, 1) = cov(1, 1) / count;
+      cov(0, 1) = cov(0, 1) / count;
+      cov(1, 0) = cov(0, 1);
+
+      //確認
+      ROS_INFO("cov_det:%f", cov.determinant());
+
+      f = VectorXf::Zero(obstacle_last_num);
+      x = Vector2f::Zero();
+      ave = Vector2f::Zero();
+      x_ave = Vector2f::Zero();
+      x_ave_trans = RowVector2f::Zero();
+      cov_inv = Matrix2f::Zero();
+      ave(0) = cluster_info(0, j);
+      ave(1) = cluster_info(1, j);
+      for(h = 0; h < obstacle_last_num; h++){
+        x(0) = h;
+        x(1) = h;
+        cov_det = cov.determinant();
+        x_ave = x - ave;
+        x_ave_trans = x_ave.transpose();
+        cov_inv = cov.inverse();
+        ave_scalar = x_ave_trans * cov_inv * x_ave;
+        f(h) = 1 / (float)sqrt(pow(2 * M_PI, 2) * cov_det) * (float)exp(- ave_scalar / 2);
+      }
+
+      likelihood[j] = f.sum();
+
+      //確認
+      ROS_INFO("x_ave:%f, x_ave_trans:%f, cov_inv:%f, ave_scalar:%f", x_ave(0), x_ave_trans(0), cov_inv(0, 0), ave_scalar);
+      ROS_INFO("f:(1)%f, (5)%f, (last)%f", f(1), f(5), f(obstacle_last_num-1));
+      ROS_INFO("k:%d, likelihood:%f", j, likelihood[j]);
+    }
+  }
+
   void run(){
-    int kakunin = 0;
+    int i, kakunin = 0;
     while(ros::ok()){
-      int k = 2;
-      kmeans(k, kakunin);
-      ros::spinOnce();
+      int k = 1, error = 0;
+      for(i = 0; i < obstacle_max; i++){
+        if(laser(i) == 0){
+          error += 1;
+        }
+      }
+      if(error == obstacle_max){
+        ROS_ERROR("Laser scan value is zero");
+      }else if(obstacle_last_num == 0){
+        ROS_WARN("There is no dynamic obstacle");
+      }else{
+        //
+        while(k <= 2){
+          kmeans(k, kakunin);
+          likelihood(k);
+          k += 1;
+        }
+      }
       kakunin += 1;
+      ros::spinOnce();
     }
   }
 private:
@@ -200,7 +262,16 @@ private:
 
   MatrixXf objects_info;
   MatrixXf cluster_info;
+  Matrix2f cov;
+  Matrix2f cov_inv;
+
   VectorXf laser;
+  Vector2f x;
+  Vector2f ave;
+  VectorXf f;
+  Vector2f x_ave;
+  RowVector2f x_ave_trans;
+
   int obstacle_last_num;
 };
 
