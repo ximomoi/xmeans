@@ -51,8 +51,8 @@ public:
   void kmeans(int k, int kakunin){
     int h, i, j, count, error = 0;
     float deg_random, rad_random, range_random, distance, cluster_old_x[k], cluster_old_y[k], x_add, y_add, center_coordinate_x = 0, center_coordinate_y = 0, center_distance, center_distance_max;
-    //cluster_info(x, y, number, cov_det_add)
-    cluster_info = MatrixXf::Zero(4, k);
+    //cluster_info(x, y, number, num_point_group, cov_det_add)
+    cluster_info = MatrixXf::Zero(5, k);
 
     for(i = 0; i < obstacle_max; i++){
       if(laser(i) == 0){
@@ -133,6 +133,8 @@ public:
               count += 1;
             }
           }
+          cluster_info(3, j) = count;
+
           if(count == 0){
             ROS_INFO("cluster No:%d does not move", j);
           }else{
@@ -179,7 +181,7 @@ public:
 
   void likelihood(int k){
     int j, h, count; 
-    float likelihood[k], cov_det, ave_scalar;
+    float log_likelihood[k], x_ave_scalar;
     //cov
     cov = Matrix2f::Zero();
     for(j = 0; j < k; j++){
@@ -200,31 +202,45 @@ public:
       //確認
       ROS_INFO("cov_det:%f", cov.determinant());
 
-      f = VectorXf::Zero(obstacle_last_num);
+      log_f = MatrixXf::Zero(40, 40);
       x = Vector2f::Zero();
       ave = Vector2f::Zero();
       x_ave = Vector2f::Zero();
-      x_ave_trans = RowVector2f::Zero();
-      cov_inv = Matrix2f::Zero();
       ave(0) = cluster_info(0, j);
       ave(1) = cluster_info(1, j);
       for(h = 0; h < obstacle_last_num; h++){
-        x(0) = h;
-        x(1) = h;
-        cov_det = cov.determinant();
-        x_ave = x - ave;
-        x_ave_trans = x_ave.transpose();
-        cov_inv = cov.inverse();
-        ave_scalar = x_ave_trans * cov_inv * x_ave;
-        f(h) = 1 / (float)sqrt(pow(2 * M_PI, 2) * cov_det) * (float)exp(- ave_scalar / 2);
+        if(cluster_info(2, j) == objects_info(3, h)){
+          x(0) = objects_info(0, h);
+          x(1) = objects_info(1, h);
+          x_ave = x - ave;
+          x_ave_scalar = x_ave.transpose() * cov.inverse() * x_ave;
+          log_f(g, e) = (float)log((float)exp(- x_ave_scalar / 2) / (float)sqrt(pow(2 * M_PI, 2) * cov.determinant()));
+        }
       }
 
-      likelihood[j] = f.sum();
+      log_likelihood[j] = log_f.sum();
 
       //確認
       ROS_INFO("x_ave:%f, x_ave_trans:%f, cov_inv:%f, ave_scalar:%f", x_ave(0), x_ave_trans(0), cov_inv(0, 0), ave_scalar);
-      ROS_INFO("f:(1)%f, (5)%f, (last)%f", f(1), f(5), f(obstacle_last_num-1));
-      ROS_INFO("k:%d, likelihood:%f", j, likelihood[j]);
+      ROS_INFO("f:(-30, 0)%f, (-20, 10)%f, (-10, 20)%f, (k)%f", f(0, 0), f(10, 10), f(20, 20), f(20, 10));
+      ROS_INFO("k:%d, log_likelihood:%f", j, log_likelihood[j]);
+      int yuudo_x = 0, yuudo_y = 0;
+      for(int g = 1; g < 60; g++){
+        int g_old = g-1;
+        for(int e = 1; e < 30; e++){
+          int e_old = e-1;
+          if(f(g_old, e_old) < f(g, e)){
+            yuudo_x = g;
+            yuudo_y = e;
+            x(0) = g;
+            x(1) = e;
+            x_ave = x - ave;
+            ave_scalar = x_ave.transpose() * cov_inv * x_ave;
+          }
+        }
+      }
+      ROS_INFO("yuudo(%d,%d):%f, ave_sca:%f", yuudo_x - 30, yuudo_y, f(yuudo_x, yuudo_y), ave_scalar);
+
     }
   }
 
@@ -263,14 +279,12 @@ private:
   MatrixXf objects_info;
   MatrixXf cluster_info;
   Matrix2f cov;
-  Matrix2f cov_inv;
+  MatrixXf log_f;
 
   VectorXf laser;
   Vector2f x;
   Vector2f ave;
-  VectorXf f;
   Vector2f x_ave;
-  RowVector2f x_ave_trans;
 
   int obstacle_last_num;
 };
