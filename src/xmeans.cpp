@@ -18,36 +18,36 @@ class Xmeans{
 public:
   Xmeans(){
     scan_sub = nh.subscribe("/scan", 10, &Xmeans::scanCallBack, this);
-    obstacle_cluster_pub = nh.advertise<sensor_msgs::PointCloud>("/obstacle_cluster", 1000);
+    obstacle_clustering_pub = nh.advertise<sensor_msgs::PointCloud>("/obstacle_clustering", 1000);
 
-    obstacle_last_num = obstacle_max;
-
-    //objects_info(x, y, k_distance, cluster_divide_num, cluster_num)
-    objects_info = MatrixXf::Zero(5, obstacle_max);
     //cluster_divide_info(x, y, number, num_point_group, size, log_likelihood, check_ini)
     cluster_divide_info = MatrixXf::Zero(7, k);
+
+    callback = false;
    
-    laser = VectorXf::Zero(obstacle_max);
-
-    cluster.points.resize(obstacle_max);
-
     ros::Rate loop_rate(10);
   }
 
   void scanCallBack(const sensor_msgs::LaserScan::ConstPtr& scan){
     int h = 0, i, x_max = -30, y_max = 0;
     float deg = 0, rad, add_coordinate_x = 0, add_coordinate_y = 0, x_ave_scalar;
-    obstacle_last_num = obstacle_max;
+    callback = true;
+    obstacle_last_num = 0;
     cluster_num = cluster_num_ini;
     //cluster_info(x, y, number, num_point_group, size, log_likelihood, check)
     cluster_info = MatrixXf::Zero(7, cluster_num);
 
+    for(i = 0; i < obstacle_max; i++){
+      if(scan->ranges[i] < 29){
+        obstacle_last_num += 1;
+      }
+    }
+    //objects_info(x, y, k_distance, cluster_divide_num, cluster_num)
+    objects_info = MatrixXf::Zero(5, obstacle_last_num);
+
     ROS_INFO("-------------hogehoge---------------");
     for(i = 0; i < obstacle_max; i++){
-      laser(i) = scan->ranges[i];
-      if(laser(i) > 29){
-        obstacle_last_num += -1;
-      }else{
+      if(scan->ranges[i] < 29){
         rad = deg * M_PI / 180;
         objects_info(0, h) = scan->ranges[i] * cos(rad);
         objects_info(1, h) = scan->ranges[i] * sin(rad);
@@ -138,7 +138,6 @@ public:
       ROS_INFO("rand_clus_x:%f, rand_clus_y:%f", cluster_divide_info(0, j), cluster_divide_info(1, j));
     }
 
-    int syuusoku = 0;
     while(true){
       int decision = 0;
       //クラスタの割り当て
@@ -203,27 +202,25 @@ public:
       if(decision == k){
         //size
         for(j = 0; j < k; j++){
-        float x_max = -30, y_max = 0;
+          float max = 0, min = 60;
           for(h = 0; h < obstacle_last_num; h++){
             if(cluster_info(2, select_cluster) == objects_info(4, h) && cluster_divide_info(2, j) == objects_info(3, h)){
-              if(x_max < objects_info(0, h)){
-                x_max = objects_info(0, h);
+              if(max < objects_info(2, h)){
+                max = objects_info(2, h);
               }
-              if(y_max < objects_info(1, h)){
-                y_max = objects_info(1, h);
+              if(min > objects_info(2, h)){
+                min = objects_info(2, h);
               }
             }
           }
-          cluster_divide_info(4, j) = (x_max - cluster_divide_info(0, j)) * (y_max - cluster_divide_info(1, j)) * M_PI;
+          cluster_divide_info(4, j) = max * min * M_PI;
         }
         break;
       }
       //確認
       ROS_INFO("3-----");
-      ROS_INFO("kaisuu:%d, last_num:%d", syuusoku, obstacle_last_num);
+      ROS_INFO("last_num:%d", obstacle_last_num);
       ROS_INFO("------");
-
-      syuusoku += 1;
 
     }
     ROS_INFO("--------------finish");
@@ -301,12 +298,9 @@ public:
   }
 
   void comparison(){
-    int h, c, content, count = 0, new_c_num = 2;
+    int h, c, content, count = 0, new_c_num = 2, check;
     MatrixXf cluster_stack;
     cluster_stack = MatrixXf::Zero(7, cluster_num);
-
-    //確認
-    ROS_INFO("clu_num:%d, bic1:%f, bic2:%f", cluster_num, bic1, bic2);
 
     //分割しない
     if(bic1 <= bic2 || no_belong_cluster == true){
@@ -317,22 +311,22 @@ public:
     }else{
       //cluster_infoをstack
       for(c = 0; c < cluster_num; c++){
+        check = false;
         if(cluster_info(2, c) != select_cluster){
           for(content = 0; content < 7; content++){
             cluster_stack(content, count) = cluster_info(content, c);
-            //確認
-            ROS_INFO("kakuninn 1");
           }
           count += 1;
         }
         for(h = 0; h < obstacle_last_num; h++){
           if(objects_info(4, h) != select_cluster && objects_info(4, h) == c){
             objects_info(3, h) = new_c_num;
-            //確認
-            ROS_INFO("kakuninn 2");
+            check = true;
           }
         }
-        new_c_num += 1;
+        if(check == true){
+          new_c_num += 1;
+        }
       }
 
       cluster_num += 1;
@@ -351,29 +345,20 @@ public:
 
           ROS_INFO("content:%d, c:%d, %f", content, c, cluster_info(content, c));
         }
-        //確認
-        ROS_INFO("kakuninn 3");
       }
       for(h = 0; h < obstacle_last_num; h++){
         objects_info(4, h) = objects_info(3, h);
       }
-      //確認
-      ROS_INFO("kakuninn 4");
     }
   }
 
   void run(){
-    int i;
+    int i, kaisuu = 0;
     float bif_bic, aft_bic, bic_max;
+    sensor_msgs::PointCloud clustering;
     while(ros::ok()){
-      int error = 0;
-      for(i = 0; i < obstacle_max; i++){
-        if(laser(i) == 0){
-          error += 1;
-        }
-      }
-      if(error == obstacle_max){
-        ROS_ERROR("Laser scan value is zero");
+      if(callback == false){
+        ROS_ERROR("Laser scan is not call");
       }else if(obstacle_last_num == 0){
         ROS_WARN("There is no dynamic obstacle");
       }else{
@@ -389,12 +374,15 @@ public:
           }
         }
         //確認
-        ROS_INFO("cluster_num:%d", cluster_num);
+        ROS_INFO("cluster_num:%d, kaisuu%d", cluster_num, kaisuu);
+        clustering.points.resize(cluster_num);
         for(int c = 0; c < cluster_num; c++){
-          ROS_INFO("x%f, y%f, num%f", cluster_info(0, c), cluster_info(1, c), cluster_info(3, c));
+          ROS_INFO("x%f, y%f, count%f, num%f, size%f", cluster_info(0, c), cluster_info(1, c), cluster_info(2, c), cluster_info(3, c), cluster_info(4, c));
+          clustering.points[c].x = cluster_info(0, c);
+          clustering.points[c].y = cluster_info(1, c);
         }
-
-        break;
+        kaisuu += 1;
+        obstacle_clustering_pub.publish(clustering);
       }
       ros::spinOnce();
     }
@@ -402,7 +390,7 @@ public:
 private:
   ros::NodeHandle nh;
   ros::Subscriber scan_sub;
-  ros::Publisher obstacle_cluster_pub;
+  ros::Publisher obstacle_clustering_pub;
 
   sensor_msgs::PointCloud cluster;
 
@@ -411,13 +399,12 @@ private:
   MatrixXf cluster_divide_info;
   Matrix2f cov;
 
-  VectorXf laser;
   Vector2f x;
   Vector2f ave;
   Vector2f x_ave;
   VectorXf log_f;
 
-  int obstacle_last_num, cluster_num, select_cluster, no_belong_cluster;
+  int obstacle_last_num, cluster_num, select_cluster, no_belong_cluster, callback;
   float cov_det[2], bic1, bic2;
 };
 
