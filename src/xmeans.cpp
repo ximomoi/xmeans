@@ -8,6 +8,7 @@
 #include <sstream>
 #include <complex>
 #include <stdlib.h>
+#include <laser_geometry/laser_geometry.h>
 #define obstacle_max 720
 #define cluster_num_ini 1
 #define k 2
@@ -20,6 +21,9 @@ public:
     scan_sub = nh.subscribe("/scan", 10, &Xmeans::scanCallBack, this);
     obstacle_clustering_pub = nh.advertise<sensor_msgs::PointCloud>("/obstacle_clustering", 1000);
 
+    //
+    laser_geometry_pub = nh.advertise<sensor_msgs::PointCloud>("/laser_geometry", 1000);
+
     //cluster_divide_info(x, y, number, num_point_group, size, log_likelihood, check_ini)
     cluster_divide_info = MatrixXf::Zero(7, k);
 
@@ -30,15 +34,20 @@ public:
 
   void scanCallBack(const sensor_msgs::LaserScan::ConstPtr& scan){
     int h = 0, i, x_max = -30, y_max = 0;
-    float deg = 0, rad, add_coordinate_x = 0, add_coordinate_y = 0, x_ave_scalar;
+    float deg = 180, rad, add_coordinate_x = 0, add_coordinate_y = 0, x_ave_scalar, distance;
     callback = true;
     obstacle_last_num = 0;
     cluster_num = cluster_num_ini;
     //cluster_info(x, y, number, num_point_group, size, log_likelihood, check)
     cluster_info = MatrixXf::Zero(7, cluster_num);
 
+    //laserscanからpointcloudに変換
+    projector_.projectLaser(*scan, cloud);
+    laser_geometry_pub.publish(cloud);
+
     for(i = 0; i < obstacle_max; i++){
-      if(scan->ranges[i] < 29){
+      distance = hypotf(cloud.points[i].x, cloud.points[i].y);
+      if(distance < 29 && distance != 0){
         obstacle_last_num += 1;
       }
     }
@@ -47,10 +56,12 @@ public:
 
     ROS_INFO("-------------hogehoge---------------");
     for(i = 0; i < obstacle_max; i++){
-      if(scan->ranges[i] < 29){
+      distance = hypotf(cloud.points[i].x, cloud.points[i].y);
+      if(distance < 29 && distance != 0){
         rad = deg * M_PI / 180;
-        objects_info(0, h) = scan->ranges[i] * cos(rad);
-        objects_info(1, h) = scan->ranges[i] * sin(rad);
+        objects_info(0, h) = cloud.points[i].x;
+        objects_info(1, h) = cloud.points[i].y;
+        
         add_coordinate_x += objects_info(0, h);
         add_coordinate_y += objects_info(1, h);
         if(x_max < objects_info(0, h)){
@@ -61,7 +72,7 @@ public:
         }
         h += 1;
       }
-      deg += 0.25;
+      deg += -0.25;
     }
     cluster_info(0, 0) = add_coordinate_x / obstacle_last_num;
     cluster_info(1, 0) = add_coordinate_y / obstacle_last_num;
@@ -223,7 +234,6 @@ public:
       ROS_INFO("------");
 
     }
-    ROS_INFO("--------------finish");
   }
 
   void likelihood(){
@@ -376,11 +386,16 @@ public:
         //確認
         ROS_INFO("cluster_num:%d, kaisuu%d", cluster_num, kaisuu);
         clustering.points.resize(cluster_num);
+        clustering.channels.resize(1);
+        clustering.channels[0].name = "intensity";
+        clustering.channels[0].values.resize(cluster_num);
         for(int c = 0; c < cluster_num; c++){
           ROS_INFO("x%f, y%f, count%f, num%f, size%f", cluster_info(0, c), cluster_info(1, c), cluster_info(2, c), cluster_info(3, c), cluster_info(4, c));
+          clustering.channels[0].values[c] = c;
           clustering.points[c].x = cluster_info(0, c);
           clustering.points[c].y = cluster_info(1, c);
         }
+        clustering.header.frame_id = "hokuyo_link";
         kaisuu += 1;
         obstacle_clustering_pub.publish(clustering);
       }
@@ -392,7 +407,13 @@ private:
   ros::Subscriber scan_sub;
   ros::Publisher obstacle_clustering_pub;
 
+  //
+  ros::Publisher laser_geometry_pub;
+
+  laser_geometry::LaserProjection projector_;
+
   sensor_msgs::PointCloud cluster;
+  sensor_msgs::PointCloud cloud;
 
   MatrixXf objects_info;
   MatrixXf cluster_info;
