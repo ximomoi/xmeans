@@ -7,7 +7,6 @@
 #include <sstream>
 #include <complex>
 #include <stdlib.h>
-#define cluster_num_ini 1
 #define k 2
 
 using namespace Eigen;
@@ -29,15 +28,24 @@ public:
     float deg = 180, rad, add_coordinate_x = 0, add_coordinate_y = 0, x_ave_scalar, distance;
     callback = true;
     obstacle_num = (int)msg->points.size();
-    cluster_num = cluster_num_ini;
+    cluster_num = 1;
     //cluster_info(x, y, number, num_point_group, size, log_likelihood, check)
     cluster_info = MatrixXf::Zero(7, cluster_num);
 
     //objects_info(x, y, k_distance, cluster_divide_num, cluster_num)
     objects_info = MatrixXf::Zero(5, obstacle_num);
 
+    clustering.points.resize(obstacle_num);
+    clustering.channels.resize(2);
+    clustering.channels[0].name = "intensity";
+    clustering.channels[0].values.resize(obstacle_num);
+
     ROS_INFO("-------------hogehoge---------------");
-    for(i = 0; i < (int)msg->points.size(); i++){
+    for(i = 0; i < obstacle_num; i++){
+      clustering.points[i].x = msg->points[i].x;
+      clustering.points[i].y = msg->points[i].y;
+      clustering.channels[0].values[i] = msg->channels[0].values[i];
+
       objects_info(0, i) = msg->points[i].x;
       objects_info(1, i) = msg->points[i].y;
 
@@ -339,11 +347,10 @@ public:
   }
 
   void run(){
-    int c, kaisuu = 0;
-    sensor_msgs::PointCloud clustering;
+    int i, kaisuu = 0;
     while(ros::ok()){
       if(callback == false){
-        ROS_ERROR("dynamic_obsracle is not call");
+        ROS_WARN("dynamic_obsracle is not call");
       }else{
         while(true){
           if(check() == true){
@@ -359,17 +366,13 @@ public:
         //確認
         ROS_INFO("cluster_num:%d, kaisuu%d", cluster_num, kaisuu);
 
-        clustering.points.resize(cluster_num);
-        clustering.channels.resize(1);
-        clustering.channels[0].name = "intensity";
-        clustering.channels[0].values.resize(cluster_num);
-        for(c = 0; c < cluster_num; c++){
-          ROS_INFO("x%f, y%f, count%f, num%f, size%f", cluster_info(0, c), cluster_info(1, c), cluster_info(2, c), cluster_info(3, c), cluster_info(4, c));
-          clustering.channels[0].values[c] = c;
-          clustering.points[c].x = cluster_info(0, c);
-          clustering.points[c].y = cluster_info(1, c);
+        clustering.channels[1].name = "number";
+        clustering.channels[1].values.resize(obstacle_num);
+        for(i = 0; i < obstacle_num; i++){
+          clustering.channels[1].values[i] = objects_info(4, i);
         }
         clustering.header.frame_id = "base_link";
+        clustering.header.stamp = ros::Time::now();
         kaisuu += 1;
         obstacle_clustering_pub.publish(clustering);
       }
@@ -381,7 +384,7 @@ private:
   ros::Subscriber dynamic_obstacle_sub;
   ros::Publisher obstacle_clustering_pub;
 
-  sensor_msgs::PointCloud cluster;
+  sensor_msgs::PointCloud clustering;
 
   MatrixXf objects_info;
   MatrixXf cluster_info;
