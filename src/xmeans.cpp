@@ -349,7 +349,7 @@ public:
   void run(){
     int i, kaisuu = 0;
     while(ros::ok()){
-      if(callback == false){
+      if(callback == false || obstacle_num == 0){
         ROS_WARN("dynamic_obsracle is not call");
       }else{
         while(true){
