@@ -16,6 +16,7 @@ public:
   Xmeans(){
     dynamic_obstacle_sub = nh.subscribe("dynamic_obstacle", 100, &Xmeans::dynamic_obstacleCallBack, this);
     obstacle_clustering_pub = nh.advertise<sensor_msgs::PointCloud>("obstacle_clustering", 1000);
+    objects_pub = nh.advertise<sensor_msgs::PointCloud>("objects", 1000);
 
     //cluster_divide_info(x, y, number, num_point_group, size, log_likelihood, check_ini)
     cluster_divide_info = MatrixXf::Zero(7, k);
@@ -25,15 +26,22 @@ public:
 
   void dynamic_obstacleCallBack(const sensor_msgs::PointCloud::ConstPtr& msg){
     int i, x_max = -30, y_max = 0;
-    float deg = 180, rad, add_coordinate_x = 0, add_coordinate_y = 0, x_ave_scalar, distance;
+    float add_coordinate_x = 0, add_coordinate_y = 0, x_ave_scalar, distance;
     callback = true;
     obstacle_num = (int)msg->points.size();
     cluster_num = 1;
+
+    objects.header.frame_id = msg->header.frame_id;
+    objects.header.stamp = ros::Time::now();
+
+    clustering.header.frame_id = msg->header.frame_id;
+    clustering.header.stamp = msg->header.stamp;
+
     //cluster_info(x, y, number, num_point_group, size, log_likelihood, check)
     cluster_info = MatrixXf::Zero(7, cluster_num);
 
-    //objects_info(x, y, k_distance, cluster_divide_num, cluster_num)
-    objects_info = MatrixXf::Zero(5, obstacle_num);
+    //obstacle_info(x, y, k_distance, cluster_divide_num, cluster_num)
+    obstacle_info = MatrixXf::Zero(5, obstacle_num);
 
     clustering.points.resize(obstacle_num);
     clustering.channels.resize(2);
@@ -46,29 +54,29 @@ public:
       clustering.points[i].y = msg->points[i].y;
       clustering.channels[0].values[i] = msg->channels[0].values[i];
 
-      objects_info(0, i) = msg->points[i].x;
-      objects_info(1, i) = msg->points[i].y;
+      obstacle_info(0, i) = msg->points[i].x;
+      obstacle_info(1, i) = msg->points[i].y;
 
-      add_coordinate_x += objects_info(0, i);
-      add_coordinate_y += objects_info(1, i);
-      if(x_max < objects_info(0, i)){
-        x_max = objects_info(0, i);
+      add_coordinate_x += obstacle_info(0, i);
+      add_coordinate_y += obstacle_info(1, i);
+      if(x_max < obstacle_info(0, i)){
+        x_max = obstacle_info(0, i);
       }
-      if(y_max < objects_info(1, i)){
-        y_max = objects_info(1, i);
+      if(y_max < obstacle_info(1, i)){
+        y_max = obstacle_info(1, i);
       }
     }
     cluster_info(0, 0) = add_coordinate_x / obstacle_num;
     cluster_info(1, 0) = add_coordinate_y / obstacle_num;
     cluster_info(3, 0) = obstacle_num;
     cluster_info(4, 0) = (x_max - cluster_info(0, 0)) * (y_max - cluster_info(1, 0)) * M_PI;
- 
+
     //cov
     cov = Matrix2f::Zero();
     for(i = 0; i < obstacle_num; i++){
-      cov(0, 0) += pow(cluster_info(0, 0) - objects_info(0, i), 2);
-      cov(1, 1) += pow(cluster_info(1, 0) - objects_info(1, i), 2);
-      cov(0, 1) += (cluster_info(0, 0) - objects_info(0, i)) * (cluster_info(1, 0) - objects_info(1, i));
+      cov(0, 0) += pow(cluster_info(0, 0) - obstacle_info(0, i), 2);
+      cov(1, 1) += pow(cluster_info(1, 0) - obstacle_info(1, i), 2);
+      cov(0, 1) += (cluster_info(0, 0) - obstacle_info(0, i)) * (cluster_info(1, 0) - obstacle_info(1, i));
     }
     cov(0, 0) = cov(0, 0) / obstacle_num;
     cov(1, 1) = cov(1, 1) / obstacle_num;
@@ -85,8 +93,8 @@ public:
     ave(0) = cluster_info(0, 0);
     ave(1) = cluster_info(1, 0);
     for(i = 0; i < obstacle_num; i++){
-        x(0) = objects_info(0, i);
-        x(1) = objects_info(1, i);
+        x(0) = obstacle_info(0, i);
+        x(1) = obstacle_info(1, i);
         x_ave = x - ave;
         x_ave_scalar = x_ave.transpose() * cov.inverse() * x_ave;
         log_f(i) = (float)log((float)exp(- x_ave_scalar / 2) / (float)sqrt((float)pow(2 * M_PI, 2) * cov.determinant()));
@@ -137,15 +145,15 @@ public:
       int decision = 0;
       //クラスタの割り当て
       for(i = 0; i < obstacle_num; i++){
-        if(cluster_info(2, select_cluster) == objects_info(4, i)){
+        if(cluster_info(2, select_cluster) == obstacle_info(4, i)){
           for(j = 0; j < k; j++){
-            distance = hypotf(objects_info(0, i) - cluster_divide_info(0, j), objects_info(1, i) - cluster_divide_info(1, j));
+            distance = hypotf(obstacle_info(0, i) - cluster_divide_info(0, j), obstacle_info(1, i) - cluster_divide_info(1, j));
             if(j == 0){
-              objects_info(2, i) = distance;
-              objects_info(3, i) = j;
-            }else if(objects_info(2, i) > distance){
-              objects_info(2, i) = distance;
-              objects_info(3, i) = j;
+              obstacle_info(2, i) = distance;
+              obstacle_info(3, i) = j;
+            }else if(obstacle_info(2, i) > distance){
+              obstacle_info(2, i) = distance;
+              obstacle_info(3, i) = j;
             }
           }
         }
@@ -164,9 +172,9 @@ public:
         y_add = 0;
         count = 0;
         for(i = 0; i < obstacle_num; i++){
-          if(cluster_info(2, select_cluster) == objects_info(4, i) && cluster_divide_info(2, j) == objects_info(3, i)){
-            x_add += objects_info(0, i);
-            y_add += objects_info(1, i);
+          if(cluster_info(2, select_cluster) == obstacle_info(4, i) && cluster_divide_info(2, j) == obstacle_info(3, i)){
+            x_add += obstacle_info(0, i);
+            y_add += obstacle_info(1, i);
             count += 1;
           }
         }
@@ -199,12 +207,12 @@ public:
         for(j = 0; j < k; j++){
           float max = 0, min = 60;
           for(i = 0; i < obstacle_num; i++){
-            if(cluster_info(2, select_cluster) == objects_info(4, i) && cluster_divide_info(2, j) == objects_info(3, i)){
-              if(max < objects_info(2, i)){
-                max = objects_info(2, i);
+            if(cluster_info(2, select_cluster) == obstacle_info(4, i) && cluster_divide_info(2, j) == obstacle_info(3, i)){
+              if(max < obstacle_info(2, i)){
+                max = obstacle_info(2, i);
               }
-              if(min > objects_info(2, i)){
-                min = objects_info(2, i);
+              if(min > obstacle_info(2, i)){
+                min = obstacle_info(2, i);
               }
             }
           }
@@ -229,10 +237,10 @@ public:
       count = 0;
       cov = Matrix2f::Zero();
       for(i = 0; i < obstacle_num; i++){
-        if(cluster_info(2, select_cluster) == objects_info(4, i) && cluster_divide_info(2, j) == objects_info(3, i)){
-          cov(0, 0) += pow(cluster_divide_info(0, j) - objects_info(0, i), 2);
-          cov(1, 1) += pow(cluster_divide_info(1, j) - objects_info(1, i), 2);
-          cov(0, 1) += (cluster_divide_info(0, j) - objects_info(0, i)) * (cluster_divide_info(1, j) - objects_info(1, i));
+        if(cluster_info(2, select_cluster) == obstacle_info(4, i) && cluster_divide_info(2, j) == obstacle_info(3, i)){
+          cov(0, 0) += pow(cluster_divide_info(0, j) - obstacle_info(0, i), 2);
+          cov(1, 1) += pow(cluster_divide_info(1, j) - obstacle_info(1, i), 2);
+          cov(0, 1) += (cluster_divide_info(0, j) - obstacle_info(0, i)) * (cluster_divide_info(1, j) - obstacle_info(1, i));
           count += 1;
         }
       }
@@ -254,9 +262,9 @@ public:
       ave(1) = cluster_divide_info(1, j);
       count = 0;
       for(i = 0; i < obstacle_num; i++){
-        if(cluster_info(2, select_cluster) == objects_info(4, i) && cluster_divide_info(2, j) == objects_info(3, i)){
-          x(0) = objects_info(0, i);
-          x(1) = objects_info(1, i);
+        if(cluster_info(2, select_cluster) == obstacle_info(4, i) && cluster_divide_info(2, j) == obstacle_info(3, i)){
+          x(0) = obstacle_info(0, i);
+          x(1) = obstacle_info(1, i);
           x_ave = x - ave;
           x_ave_scalar = x_ave.transpose() * cov.inverse() * x_ave;
           log_f(count) = (float)log((float)exp(- x_ave_scalar / 2) / (float)sqrt((float)pow(2 * M_PI, 2) * cov.determinant()));
@@ -313,8 +321,8 @@ public:
           count += 1;
         }
         for(i = 0; i < obstacle_num; i++){
-          if(objects_info(4, i) != select_cluster && objects_info(4, i) == c){
-            objects_info(3, i) = new_c_num;
+          if(obstacle_info(4, i) != select_cluster && obstacle_info(4, i) == c){
+            obstacle_info(3, i) = new_c_num;
             check = true;
           }
         }
@@ -341,7 +349,7 @@ public:
         }
       }
       for(i = 0; i < obstacle_num; i++){
-        objects_info(4, i) = objects_info(3, i);
+        obstacle_info(4, i) = obstacle_info(3, i);
       }
     }
   }
@@ -366,13 +374,23 @@ public:
         //確認
         ROS_INFO("cluster_num:%d, kaisuu%d", cluster_num, kaisuu);
 
+        objects.points.clear();
+        objects.points.resize(cluster_num);
+        objects.channels.resize(1);
+        objects.channels[0].name = "number";
+        objects.channels[0].values.resize(cluster_num);
+        for(i = 0; i < cluster_num; i++){
+          objects.points[i].x = cluster_info(0, i);
+          objects.points[i].y = cluster_info(1, i);
+          objects.channels[0].values[i] = i;
+        }
+        objects_pub.publish(objects);
+
         clustering.channels[1].name = "number";
         clustering.channels[1].values.resize(obstacle_num);
         for(i = 0; i < obstacle_num; i++){
-          clustering.channels[1].values[i] = objects_info(4, i);
+          clustering.channels[1].values[i] = obstacle_info(4, i);
         }
-        clustering.header.frame_id = "base_link";
-        clustering.header.stamp = ros::Time::now();
         kaisuu += 1;
         obstacle_clustering_pub.publish(clustering);
       }
@@ -383,10 +401,12 @@ private:
   ros::NodeHandle nh;
   ros::Subscriber dynamic_obstacle_sub;
   ros::Publisher obstacle_clustering_pub;
+  ros::Publisher objects_pub;
 
   sensor_msgs::PointCloud clustering;
+  sensor_msgs::PointCloud objects;
 
-  MatrixXf objects_info;
+  MatrixXf obstacle_info;
   MatrixXf cluster_info;
   MatrixXf cluster_divide_info;
   Matrix2f cov;
