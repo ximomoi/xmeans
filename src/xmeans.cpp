@@ -44,15 +44,12 @@ public:
     obstacle_info = MatrixXf::Zero(5, obstacle_num);
 
     clustering.points.resize(obstacle_num);
-    clustering.channels.resize(2);
-    clustering.channels[0].name = "intensity";
-    clustering.channels[0].values.resize(obstacle_num);
+    clustering.channels.resize(1);
 
     ROS_INFO("-------------hogehoge---------------");
     for(i = 0; i < obstacle_num; i++){
       clustering.points[i].x = msg->points[i].x;
       clustering.points[i].y = msg->points[i].y;
-      clustering.channels[0].values[i] = msg->channels[0].values[i];
 
       obstacle_info(0, i) = msg->points[i].x;
       obstacle_info(1, i) = msg->points[i].y;
@@ -386,10 +383,10 @@ public:
         }
         objects_pub.publish(objects);
 
-        clustering.channels[1].name = "number";
-        clustering.channels[1].values.resize(obstacle_num);
+        clustering.channels[0].name = "number";
+        clustering.channels[0].values.resize(obstacle_num);
         for(i = 0; i < obstacle_num; i++){
-          clustering.channels[1].values[i] = obstacle_info(4, i);
+          clustering.channels[0].values[i] = obstacle_info(4, i);
         }
         kaisuu += 1;
         obstacle_clustering_pub.publish(clustering);
