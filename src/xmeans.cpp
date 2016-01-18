@@ -10,6 +10,7 @@
 #define k 2
 
 using namespace Eigen;
+using namespace std;
 
 class Xmeans{
 public:
@@ -18,8 +19,8 @@ public:
     obstacle_clustering_pub = nh.advertise<sensor_msgs::PointCloud>("obstacle_clustering", 1000);
     objects_pub = nh.advertise<sensor_msgs::PointCloud>("objects", 1000);
 
-    //cluster_divide_info(x, y, number, num_point_group, size, log_likelihood, check_ini)
-    cluster_divide_info = MatrixXf::Zero(7, k);
+    //cluster_divide_info(x, y, number, num_point_group, size, log_likelihood, check_ini, cov_det)
+    cluster_divide_info = MatrixXf::Zero(8, k);
 
     callback = false;
   }
@@ -37,8 +38,8 @@ public:
     clustering.header.frame_id = msg->header.frame_id;
     clustering.header.stamp = msg->header.stamp;
 
-    //cluster_info(x, y, number, num_point_group, size, log_likelihood, check)
-    cluster_info = MatrixXf::Zero(7, cluster_num);
+    //cluster_info(x, y, number, num_point_group, size, log_likelihood, check, cov_det)
+    cluster_info = MatrixXf::Zero(8, cluster_num);
 
     //obstacle_info(x, y, k_distance, cluster_divide_num, cluster_num)
     obstacle_info = MatrixXf::Zero(5, obstacle_num);
@@ -79,6 +80,8 @@ public:
     cov(1, 1) = cov(1, 1) / obstacle_num;
     cov(0, 1) = cov(0, 1) / obstacle_num;
     cov(1, 0) = cov(0, 1);
+
+    cluster_info(7, 0) = cov.determinant();
 
     //確認
     ROS_INFO("cov_det:%f", cov.determinant());
@@ -247,6 +250,7 @@ public:
       cov(1, 0) = cov(0, 1);
 
       cov_det[j] = cov.determinant();
+      cluster_divide_info(7, j) = cov.determinant();
 
       //確認
       ROS_INFO("cov_det:%f", cov.determinant());
@@ -299,7 +303,7 @@ public:
   void comparison(){
     int i, c, content, count = 0, new_c_num = 2, check;
     MatrixXf cluster_stack;
-    cluster_stack = MatrixXf::Zero(7, cluster_num);
+    cluster_stack = MatrixXf::Zero(8, cluster_num);
 
     //分割しない
     if(bic1 <= bic2 || no_belong_cluster == true){
@@ -312,7 +316,7 @@ public:
       for(c = 0; c < cluster_num; c++){
         check = false;
         if(cluster_info(2, c) != select_cluster){
-          for(content = 0; content < 7; content++){
+          for(content = 0; content < 8; content++){
             cluster_stack(content, count) = cluster_info(content, c);
           }
           count += 1;
@@ -331,10 +335,10 @@ public:
       cluster_num += 1;
 
      //cluster_info(x, y, number, num_point_group, size, log_likelihood, check)
-     cluster_info = MatrixXf::Zero(7, cluster_num);
+     cluster_info = MatrixXf::Zero(8, cluster_num);
 
       for(c = 0; c < cluster_num; c++){
-        for(content = 0; content < 7; content++){
+        for(content = 0; content < 8; content++){
           if(c < 2){
             cluster_info(content, c) = cluster_divide_info(content, c);
           }else{
@@ -351,11 +355,83 @@ public:
     }
   }
 
+  void annexation(){///使ってない
+    float bic_a, bic_b, beta, alpha, cluster_points_num[cluster_num], tmp;
+    int dimension = 2, q, check, pass[cluster_num];
+    Vector2f cluster_dif;
+    cluster_dif = Vector2f::Zero();
+    q = dimension * (dimension + 3) / 2;
+    for(int i = 0; i < cluster_num; i++){
+      ROS_INFO("---x:%f, y:%f, number:%f, num_point_group:%f, size:%f, log_likelihood:%f, check:%f", cluster_info(0, i), cluster_info(1, i), cluster_info(2, i), cluster_info(3, i), cluster_info(4, i), cluster_info(5, i), cluster_info(6, i));
+      cluster_points_num[i] = cluster_info(3, i);
+    }
+    //インサーションソート
+    for(int i = 1; i < cluster_num; i++){
+      tmp = cluster_points_num[i];
+      if(cluster_points_num[i - 1] > tmp){
+        int j = i;
+        do{
+          cluster_points_num[i] = cluster_points_num[i - 1];
+          j--;
+        }while(j > 0 && cluster_points_num[j - 1] > tmp);
+        cluster_points_num[j] = tmp;
+      }
+    }
+
+    for(int i = 0; i < cluster_num; i++){
+      pass[i] = -1;
+    }
+
+    int m = 0, o = 0;
+    for(int i = 0; i < cluster_num - 1; i++){
+      for(int j = i + 1; j < cluster_num; j++){
+        for(int p = 0; p < cluster_num; p++){
+          if(pass[p] == i || pass[p] == j){
+            check = true;
+          }
+        }
+        if(check == true){
+          break;
+
+        }else{
+          for(int l = 0; l < cluster_num; l++){
+            for(int n = 0; n < cluster_num; n++){
+              if(cluster_points_num[i] == cluster_info(3, l) && cluster_points_num[j] == cluster_info(3, n)){
+                bic_a = -2 * cluster_info(5, l) + q * (float)log(cluster_info(3, l));
+
+                cluster_dif(0) = cluster_info(0, l) - cluster_info(0, n);
+                cluster_dif(1) = cluster_info(1, l) - cluster_info(1, n);
+                beta = cluster_dif.norm() / (float)sqrt(cluster_info(7, l) + cluster_info(7, n));
+                alpha = 0.5 / (1 / 1 + (float)exp(-beta));
+                bic_b = -2 * (cluster_info(3, l) * (float)log(alpha) + (cluster_info(5, l) + cluster_info(5, n)) / 2) + (2 * q) * (float)log(cluster_info(3, l));
+
+                if(bic_a > bic_b){
+                  ROS_WARN("hogehoge");///////
+                  cluster_annexation_x[n] = (cluster_info(0, l) + cluster_info(0, n)) / 2;
+                  cluster_annexation_y[n] = (cluster_info(1, l) + cluster_info(1, n)) / 2;
+                  cluster_annexation_num[n] = cluster_info(2, n);
+                  cluster_annexation_points[n] = cluster_info(3, l) + cluster_info(3, n);
+                  cluster_annexation_del_num[n] = cluster_info(2, l);
+                  m += 1;
+                  pass[o] = i;
+                  o += 1;
+                  pass[o] = j;
+                  o += 1;
+                  del_num += 1;
+                }
+              }
+            }
+          }
+        }
+
+      }
+    }
+  }
+
   void run(){
-    int i, kaisuu = 0;
+    int kaisuu = 0, i, j;
     while(ros::ok()){
       if(callback == false || obstacle_num == 0){
-        ROS_WARN("dynamic_obsracle is not call");
       }else{
         while(true){
           if(check() == true){
@@ -371,15 +447,57 @@ public:
         //確認
         ROS_INFO("cluster_num:%d, kaisuu%d", cluster_num, kaisuu);
 
+        cluster_annexation_x.clear();
+        cluster_annexation_y.clear();
+        cluster_annexation_points.clear();
+        cluster_annexation_num.clear();
+        cluster_annexation_del_num.clear();
+        cluster_annexation_x.resize(cluster_num);
+        cluster_annexation_y.resize(cluster_num);
+        cluster_annexation_points.resize(cluster_num);
+        cluster_annexation_num.resize(cluster_num);
+        cluster_annexation_del_num.resize(cluster_num);
+        del_num = 0;
+        for(int i = 0; i < cluster_num; i++){
+          cluster_annexation_num[i] = -1;
+          cluster_annexation_del_num[i] = -1;
+        }
+/*
+        if(cluster_num != 1){
+          annexation();
+        }
+*/
+        int del = false, ann = false, l = 0;
         objects.points.clear();
-        objects.points.resize(cluster_num);
+        objects.points.resize(cluster_num - del_num);
         objects.channels.resize(1);
         objects.channels[0].name = "number";
-        objects.channels[0].values.resize(cluster_num);
+        objects.channels[0].values.resize(cluster_num - del_num);
         for(i = 0; i < cluster_num; i++){
-          objects.points[i].x = cluster_info(0, i);
-          objects.points[i].y = cluster_info(1, i);
-          objects.channels[0].values[i] = i;
+          for(j = 0; j < cluster_num; j++){
+            if(cluster_info(2, i) == cluster_annexation_del_num[j]){
+              del = true;
+              break;
+            }else if(cluster_info(2, i) == cluster_annexation_num[j]){
+              ann = true;
+              break;
+            }
+          }
+          if(del == true){
+            del = false;
+            break;
+          }else if(ann == true){
+            ann = false;
+            objects.points[l].x = cluster_annexation_x[j];
+            objects.points[l].y = cluster_annexation_y[j];
+            objects.channels[0].values[l] = l;
+            l += 1;
+          }else{
+            objects.points[l].x = cluster_info(0, i);
+            objects.points[l].y = cluster_info(1, i);
+            objects.channels[0].values[l] = l;
+            l += 1;
+          }
         }
         objects_pub.publish(objects);
 
@@ -413,7 +531,8 @@ private:
   Vector2f x_ave;
   VectorXf log_f;
 
-  int obstacle_num, cluster_num, select_cluster, no_belong_cluster, callback;
+  vector<float> cluster_annexation_x, cluster_annexation_y, cluster_annexation_points, cluster_annexation_num, cluster_annexation_del_num;
+  int obstacle_num, cluster_num, select_cluster, no_belong_cluster, callback, del_num;
   float cov_det[2], bic1, bic2;
 };
 
