@@ -36,7 +36,7 @@ public:
     objects.header.stamp = ros::Time::now();
 
     clustering.header.frame_id = msg->header.frame_id;
-    clustering.header.stamp = msg->header.stamp;
+    clustering.header.stamp = ros::Time::now();
 
     //cluster_info(x, y, number, num_point_group, size, log_likelihood, check, cov_det)
     cluster_info = MatrixXf::Zero(8, cluster_num);
@@ -429,6 +429,7 @@ public:
   }
 
   void run(){
+    ros::Rate loop_rate(10);
     int kaisuu = 0, i, j;
     while(ros::ok()){
       if(callback == false || obstacle_num == 0){
@@ -510,6 +511,7 @@ public:
         obstacle_clustering_pub.publish(clustering);
       }
       ros::spinOnce();
+      loop_rate.sleep();
     }
   }
 private:
