@@ -7,7 +7,7 @@
 #include <sstream>
 #include <complex>
 #include <stdlib.h>
-#define k 2
+#define k 2 //xmeansでは再帰的にkmeansをクラスタ数2で行う
 
 using namespace Eigen;
 using namespace std;
@@ -19,6 +19,7 @@ public:
     obstacle_clustering_pub = nh.advertise<sensor_msgs::PointCloud>("obstacle_clustering", 1000);
     objects_pub = nh.advertise<sensor_msgs::PointCloud>("objects", 1000);
 
+    //分割後のクラスタ情報を入れとくトコ
     //cluster_divide_info(x, y, number, num_point_group, size, log_likelihood, check_ini, cov_det)
     cluster_divide_info = MatrixXf::Zero(8, k);
 
@@ -38,16 +39,17 @@ public:
     clustering.header.frame_id = msg->header.frame_id;
     clustering.header.stamp = ros::Time::now();
 
+    //クラスタ情報を入れとくトコ
     //cluster_info(x, y, number, num_point_group, size, log_likelihood, check, cov_det)
     cluster_info = MatrixXf::Zero(8, cluster_num);
 
+    //移動障害物点群情報を入れとくトコ
     //obstacle_info(x, y, k_distance, cluster_divide_num, cluster_num)
     obstacle_info = MatrixXf::Zero(5, obstacle_num);
 
     clustering.points.resize(obstacle_num);
     clustering.channels.resize(1);
 
-    ROS_INFO("-------------hogehoge---------------");
     for(i = 0; i < obstacle_num; i++){
       clustering.points[i].x = msg->points[i].x;
       clustering.points[i].y = msg->points[i].y;
@@ -83,7 +85,6 @@ public:
 
     cluster_info(7, 0) = cov.determinant();
 
-    //確認
     ROS_INFO("cov_det:%f", cov.determinant());
 
     log_f = VectorXf::Zero(cluster_info(3, 0));
@@ -102,7 +103,6 @@ public:
 
     cluster_info(5, 0) = log_f.sum();
 
-    //確認
     ROS_INFO("log_likelihood:%f, x_ave_scalar:%f", cluster_info(5, 0), x_ave_scalar);
   }
 
@@ -127,7 +127,7 @@ public:
     float deg_random, rad_random, range_random, distance, cluster_old_x[k], cluster_old_y[k], x_add, y_add;
     no_belong_cluster = false;
 
-    //取得した障害物の座標を元にランダムクラスタを配置する
+    //取得した障害物の座標を元にランダムにクラスタを配置
     srand((unsigned int)time(NULL));
     for(j = 0; j < k; j++){
       deg_random = (float)rand() / ((float)RAND_MAX + 1) * 360;
@@ -137,7 +137,6 @@ public:
       cluster_divide_info(1, j) = range_random * sin(rad_random) + cluster_info(1, select_cluster);
       cluster_divide_info(2, j) = j;
 
-      //確認
       ROS_INFO("rand_clus_x:%f, rand_clus_y:%f", cluster_divide_info(0, j), cluster_divide_info(1, j));
     }
 
@@ -158,8 +157,6 @@ public:
           }
         }
       }
-      //確認
-      ROS_INFO("1-----");
       ROS_INFO("range_rand:%f, deg_rand:%f", range_random, deg_random);
       ROS_INFO("------");
 
@@ -181,14 +178,12 @@ public:
         cluster_divide_info(3, j) = count;
 
         if(count == 0){
-          ROS_INFO("cluster_divide No:%d does not belong---------------------------------------------------------------", j);
+          ROS_INFO("cluster_divide No:%d does not belong", j);
           no_belong_cluster = true;
         }else{
           cluster_divide_info(0, j) = x_add / count;
           cluster_divide_info(1, j) = y_add / count;
         }
-        //確認
-        ROS_INFO("2-----");
         ROS_INFO("count:%d, k:%d", count, j);
 
         ROS_INFO("clus_old_x:%f, clus_old_y:%f", cluster_old_x[j], cluster_old_y[j]);
@@ -220,8 +215,6 @@ public:
         }
         break;
       }
-      //確認
-      ROS_INFO("3-----");
       ROS_INFO("last_num:%d", obstacle_num);
       ROS_INFO("------");
 
@@ -232,7 +225,7 @@ public:
     int i, j, count; 
     float x_ave_scalar;
 
-    //cov
+    //共分散行列
     for(j = 0; j < k; j++){
       count = 0;
       cov = Matrix2f::Zero();
@@ -252,7 +245,6 @@ public:
       cov_det[j] = cov.determinant();
       cluster_divide_info(7, j) = cov.determinant();
 
-      //確認
       ROS_INFO("cov_det:%f", cov.determinant());
 
       log_f = VectorXf::Zero(cluster_divide_info(3, j));
@@ -275,7 +267,6 @@ public:
 
       cluster_divide_info(5, j) = log_f.sum();
 
-      //確認
       ROS_INFO("log_likelihood:%f, x_ave_scalar:%f", cluster_divide_info(5, j), x_ave_scalar);
     }
   }
@@ -355,79 +346,6 @@ public:
     }
   }
 
-  void annexation(){///使ってない
-    float bic_a, bic_b, beta, alpha, cluster_points_num[cluster_num], tmp;
-    int dimension = 2, q, check, pass[cluster_num];
-    Vector2f cluster_dif;
-    cluster_dif = Vector2f::Zero();
-    q = dimension * (dimension + 3) / 2;
-    for(int i = 0; i < cluster_num; i++){
-      ROS_INFO("---x:%f, y:%f, number:%f, num_point_group:%f, size:%f, log_likelihood:%f, check:%f", cluster_info(0, i), cluster_info(1, i), cluster_info(2, i), cluster_info(3, i), cluster_info(4, i), cluster_info(5, i), cluster_info(6, i));
-      cluster_points_num[i] = cluster_info(3, i);
-    }
-    //インサーションソート
-    for(int i = 1; i < cluster_num; i++){
-      tmp = cluster_points_num[i];
-      if(cluster_points_num[i - 1] > tmp){
-        int j = i;
-        do{
-          cluster_points_num[i] = cluster_points_num[i - 1];
-          j--;
-        }while(j > 0 && cluster_points_num[j - 1] > tmp);
-        cluster_points_num[j] = tmp;
-      }
-    }
-
-    for(int i = 0; i < cluster_num; i++){
-      pass[i] = -1;
-    }
-
-    int m = 0, o = 0;
-    for(int i = 0; i < cluster_num - 1; i++){
-      for(int j = i + 1; j < cluster_num; j++){
-        for(int p = 0; p < cluster_num; p++){
-          if(pass[p] == i || pass[p] == j){
-            check = true;
-          }
-        }
-        if(check == true){
-          break;
-
-        }else{
-          for(int l = 0; l < cluster_num; l++){
-            for(int n = 0; n < cluster_num; n++){
-              if(cluster_points_num[i] == cluster_info(3, l) && cluster_points_num[j] == cluster_info(3, n)){
-                bic_a = -2 * cluster_info(5, l) + q * (float)log(cluster_info(3, l));
-
-                cluster_dif(0) = cluster_info(0, l) - cluster_info(0, n);
-                cluster_dif(1) = cluster_info(1, l) - cluster_info(1, n);
-                beta = cluster_dif.norm() / (float)sqrt(cluster_info(7, l) + cluster_info(7, n));
-                alpha = 0.5 / (1 / 1 + (float)exp(-beta));
-                bic_b = -2 * (cluster_info(3, l) * (float)log(alpha) + (cluster_info(5, l) + cluster_info(5, n)) / 2) + (2 * q) * (float)log(cluster_info(3, l));
-
-                if(bic_a > bic_b){
-                  ROS_WARN("hogehoge");///////
-                  cluster_annexation_x[n] = (cluster_info(0, l) + cluster_info(0, n)) / 2;
-                  cluster_annexation_y[n] = (cluster_info(1, l) + cluster_info(1, n)) / 2;
-                  cluster_annexation_num[n] = cluster_info(2, n);
-                  cluster_annexation_points[n] = cluster_info(3, l) + cluster_info(3, n);
-                  cluster_annexation_del_num[n] = cluster_info(2, l);
-                  m += 1;
-                  pass[o] = i;
-                  o += 1;
-                  pass[o] = j;
-                  o += 1;
-                  del_num += 1;
-                }
-              }
-            }
-          }
-        }
-
-      }
-    }
-  }
-
   void run(){
     ros::Rate loop_rate(10);
     int kaisuu = 0, i, j;
@@ -439,14 +357,16 @@ public:
             ROS_INFO("finish!!");
             break;
           }else{
+            //対象の移動障害物点群とクラスタ座標を算出
             kmeans();
+            //BICの計算に必要な尤度関数を確率密度関数を用いて算出
             likelihood();
+            //分割の有無を決めるBIC値を算出
             bic();
+            //分割前と分割後のBIC値を比較し、実際に分割するかどうかを判断
             comparison();
           }
         }
-        //確認
-        ROS_INFO("cluster_num:%d, kaisuu%d", cluster_num, kaisuu);
 
         cluster_annexation_x.clear();
         cluster_annexation_y.clear();
@@ -463,11 +383,6 @@ public:
           cluster_annexation_num[i] = -1;
           cluster_annexation_del_num[i] = -1;
         }
-/*
-        if(cluster_num != 1){
-          annexation();
-        }
-*/
         int del = false, ann = false, l = 0;
         objects.points.clear();
         objects.points.resize(cluster_num - del_num);
